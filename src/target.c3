@@ -203,6 +203,9 @@ fn void format_ipv6(LabelWriter* w, usz[] groups)
 			run_len = 0;
 		}
 	}
+	// A single zero group is never compressed, per RFC 5952 4.2.2. Collapse
+	// the "no run worth compressing" case to best_start == best_len so the
+	// emit loop below cannot match it and spin.
 	if (best_len < 2)
 	{
 		best_start = 0;
@@ -215,7 +218,10 @@ fn void format_ipv6(LabelWriter* w, usz[] groups)
 	usz i = 0;
 	while (i < 8)
 	{
-		if (i == best_start)
+		// The `best_len > 0` test is load bearing. Without it an address with
+		// no compressible run would match at i == 0 and then advance i by
+		// zero, looping forever.
+		if (best_len > 0 && i == best_start)
 		{
 			w.put(':');
 			w.put(':');
