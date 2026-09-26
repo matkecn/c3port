@@ -1,35 +1,35 @@
 <*
  Command line parsing.
 
- Kept apart from main so the argument grammar can be read, and changed, on its
- own. Every switch returns through `Outcome`, so the caller never has to look
- at a partially filled Options to decide what happened.
+ Kept separate from main so the option set can grow without touching the
+ scan logic, and so parsing can be tested against a plain `String[]`.
 
- A rejected command line is ordinary user input, not a program failure, so it
- comes back as Outcome.ERROR rather than a fault.
+ Error handling note: switches are consumed by helpers that return `bool`
+ and print their own diagnostics, rather than signalling through C3 faults.
+ That keeps the control flow here flat and readable. Faults are still used
+ for genuine failures, such as a host that will not resolve.
 *>
 module c3port::cli;
 
-import std::io, std::net, std::time;
+import std::io, std::net, std::time, c3port::services;
 
 const String PROGRAM = "c3port";
 const String VERSION = "0.1.0";
 
-const String DEFAULT_PORT_SPEC = "top";
-const int DEFAULT_TIMEOUT_MS = 1000;
+const Duration DEFAULT_TIMEOUT = time::SEC;
+
+enum Outcome
+{
+	SCAN,   // options are filled in, go and scan
+	EXIT,   // --help or --version was handled, just exit successfully
+	ERROR,  // a diagnostic has already been printed
+}
 
 enum IpVersion
 {
 	AUTO,
 	V4,
 	V6,
-}
-
-enum Outcome
-{
-	SCAN,   // carry on and run a scan
-	EXIT,   // help or version was printed, stop with success
-	ERROR,  // the command line was invalid
 }
 
 struct Options
@@ -40,10 +40,26 @@ struct Options
 	IpVersion ip_version;
 	bool show_closed;
 	bool show_filtered;
-	bool show_all;
 	bool verbose;
 }
 
+fn Options* Options.init(&self)
+{
+	self.target = "";
+	// Scanning the most common ports by default keeps a bare `c3port host`
+	// both useful and quick.
+	self.port_spec = "top";
+	self.timeout = DEFAULT_TIMEOUT;
+	self.ip_version = IpVersion.AUTO;
+	self.show_closed = false;
+	self.show_filtered = false;
+	self.verbose = false;
+	return self;
+}
+
+<*
+ Translate the options into the address family the resolver should ask for.
+*>
 fn net::IpProtocol Options.protocol(Options* self)
 {
 	switch (self.ip_version)
@@ -55,41 +71,27 @@ fn net::IpProtocol Options.protocol(Options* self)
 }
 
 <*
- Parse the command line.
+ Parse `args`, including the program name at index 0.
 
- @param args : "argv, including the program name at index 0"
- @param options : "receives the parsed options when the result is SCAN"
- @return "SCAN, EXIT or ERROR"
+ `options` is always initialised first, so the caller can inspect what was
+ understood even when the outcome is ERROR.
 *>
 fn Outcome parse(String[] args, Options* options)
 {
-	options.target = "";
-	options.port_spec = DEFAULT_PORT_SPEC;
-	options.timeout = DEFAULT_TIMEOUT_MS * time::MS;
-	options.ip_version = IpVersion.AUTO;
-	options.show_closed = false;
-	options.show_filtered = false;
-	options.show_all = false;
-	options.verbose = false;
-
+	options.init();
 	usz positionals = 0;
+
 	for (usz i = 1; i < args.len; i++)
 	{
 		String arg = args[i];
+		if (arg.len == 0) continue;
 
-		if (arg == "-")
+		// A leading dash means a switch. A bare "-" is treated as a host,
+		// which is harmless because it will simply fail to resolve.
+		if (arg[0] == '-' && arg.len > 1)
 		{
-			// A bare dash is a hostname in some tools; treat it as one rather
-			// than silently ignoring the argument.
-			options.target = arg;
-			positionals++;
-			continue;
-		}
-
-		if (arg.starts_with("-"))
-		{
-			Outcome outcome = parse_switch(arg, args, &i, options);
-			if (outcome != Outcome.SCAN) return outcome;
+			Outcome step = parse_switch(arg, args, &i, options);
+			if (step != Outcome.SCAN) return step;
 			continue;
 		}
 
@@ -160,7 +162,6 @@ fn Outcome parse_switch(String arg, String[] args, usz* index, Options* options)
 	}
 	if (arg == "-a" || arg == "--all-states")
 	{
-		options.show_all = true;
 		options.show_closed = true;
 		options.show_filtered = true;
 		return Outcome.SCAN;
@@ -180,24 +181,26 @@ fn Outcome parse_switch(String arg, String[] args, usz* index, Options* options)
 		options.verbose = true;
 		return Outcome.SCAN;
 	}
+
 	if (arg == "-p" || arg == "--ports")
 	{
-		String value = take_value(inline_value, args, index, arg);
-		if (value.len == 0) return Outcome.ERROR;
+		String value;
+		if (!read_value(args, index, arg, inline_value, &value)) return Outcome.ERROR;
 		options.port_spec = value;
 		return Outcome.SCAN;
 	}
+
 	if (arg == "-t" || arg == "--timeout")
 	{
-		String value = take_value(inline_value, args, index, arg);
-		if (value.len == 0) return Outcome.ERROR;
-		int? ms = value.to_int();
-		if (!@ok(ms) || ms!! <= 0)
+		String value;
+		if (!read_value(args, index, arg, inline_value, &value)) return Outcome.ERROR;
+		long ms = value.to_int() ?? -1;
+		if (ms < 1)
 		{
-			(void)io::eprintfn("%s: --timeout expects a positive number of milliseconds, got '%s'", PROGRAM, value);
+			(void)io::eprintfn("%s: --timeout needs a positive number of milliseconds, got '%s'", PROGRAM, value);
 			return Outcome.ERROR;
 		}
-		options.timeout = ms!! * time::MS;
+		options.timeout = time::ms(ms);
 		return Outcome.SCAN;
 	}
 
@@ -207,66 +210,66 @@ fn Outcome parse_switch(String arg, String[] args, usz* index, Options* options)
 }
 
 <*
- Get the value for a switch, from either --opt=value or the next argument.
-
- @param inline_value : "the part after '=', empty if there was none"
- @param args : "argv"
- @param index : "cursor, advanced when a following argument is consumed"
- @param arg : "the switch as typed, for the error message"
- @return "the value, or empty on error with the reason already printed"
+ Fetch a switch's value, from either `--opt=value` or the next argument.
 *>
-fn String take_value(String inline_value, String[] args, usz* index, String arg)
+fn bool read_value(String[] args, usz* index, String option, String inline_value, String* out)
 {
-	if (inline_value.len > 0) return inline_value;
-
+	if (inline_value.len > 0)
+	{
+		*out = inline_value;
+		return true;
+	}
 	if (*index + 1 >= args.len)
 	{
-		(void)io::eprintfn("%s: %s needs a value", PROGRAM, arg);
-		return "";
+		(void)io::eprintfn("%s: %s needs a value", PROGRAM, option);
+		return false;
 	}
 	*index += 1;
-	return args[*index];
+	*out = args[*index];
+	return true;
 }
 
 <*
- Print the usage text.
+ Print the help text.
 
- The port spec grammar is documented here rather than only in the README,
- because this is the one screen a user sees when they get something wrong.
+ Written as a run of small print calls rather than one big literal so that
+ the layout stays easy to edit and no escaping is needed.
 *>
 fn void print_usage()
 {
+	io::printn("");
 	(void)io::printfn("%s %s - a small TCP connect port scanner", PROGRAM, VERSION);
-	(void)io::printn("");
-	(void)io::printn("USAGE");
-	(void)io::printn("    c3port <host> [-p <ports>] [options]");
-	(void)io::printn("");
-	(void)io::printn("ARGUMENTS");
-	(void)io::printn("    <host>                hostname or IP literal to scan");
-	(void)io::printn("");
-	(void)io::printn("OPTIONS");
-	(void)io::printfn("    -p, --ports <spec>    which ports to scan (default: %s)", DEFAULT_PORT_SPEC);
-	(void)io::printfn("    -t, --timeout <ms>    per port connect timeout in ms (default: %d)", DEFAULT_TIMEOUT_MS);
-	(void)io::printn("    -4                    resolve to IPv4 addresses only");
-	(void)io::printn("    -6                    resolve to IPv6 addresses only");
-	(void)io::printn("    -a, --all-states      show closed, filtered and error ports too");
-	(void)io::printn("    -c, --closed          also show closed ports");
-	(void)io::printn("    -f, --filtered        also show filtered ports");
-	(void)io::printn("    -v, --verbose         add timing and error detail per port");
-	(void)io::printn("    -h, --help            show this help");
-	(void)io::printn("        --version         show the version");
-	(void)io::printn("");
-	(void)io::printn("PORT SPEC");
-	(void)io::printn("    22                    a single port");
-	(void)io::printn("    1-1024                an inclusive range");
-	(void)io::printn("    8000-                 8000 up to 65535");
-	(void)io::printn("    80,443,8080           a comma separated mix of the above");
-	(void)io::printn("    top                   the 100 most commonly used ports");
-	(void)io::printn("    top<n>                the first <n> ports from that list");
-	(void)io::printn("    all                   every port from 1 to 65535");
-	(void)io::printn("");
-	(void)io::printn("EXAMPLES");
-	(void)io::printn("    c3port 127.0.0.1");
-	(void)io::printn("    c3port scanme.example -p 22,80,443 -t 2000");
-	(void)io::printn("    c3port 10.0.0.5 -p 1-1024 --closed");
+	io::printn("");
+	io::printn("USAGE");
+	(void)io::printfn("    %s <host> [-p <ports>] [options]", PROGRAM);
+	io::printn("");
+	io::printn("ARGUMENTS");
+	io::printn("    <host>                hostname or IP literal to scan");
+	io::printn("");
+	io::printn("OPTIONS");
+	io::printn("    -p, --ports <spec>    which ports to scan (default: top)");
+	(void)io::printfn("    -t, --timeout <ms>    per port connect timeout in ms (default: %d)", DEFAULT_TIMEOUT.to_ms());
+	io::printn("    -4                    resolve to IPv4 addresses only");
+	io::printn("    -6                    resolve to IPv6 addresses only");
+	io::printn("    -a, --all-states      show closed, filtered and error ports too");
+	io::printn("    -c, --closed          also show closed ports");
+	io::printn("    -f, --filtered        also show filtered ports");
+	io::printn("    -v, --verbose         add timing and error detail per port");
+	io::printn("    -h, --help            show this help");
+	io::printn("        --version         show the version");
+	io::printn("");
+	io::printn("PORT SPEC");
+	io::printn("    22                    a single port");
+	io::printn("    1-1024                an inclusive range");
+	io::printn("    8000-                 8000 up to 65535");
+	io::printn("    80,443,8080           a comma separated mix of the above");
+	(void)io::printfn("    top                   the %d most commonly used ports", services::DEFAULT_TOP_COUNT);
+	io::printn("    top<n>                the first <n> ports from that list");
+	io::printn("    all                   every port from 1 to 65535");
+	io::printn("");
+	io::printn("EXAMPLES");
+	(void)io::printfn("    %s 127.0.0.1", PROGRAM);
+	(void)io::printfn("    %s scanme.example -p 22,80,443 -t 2000", PROGRAM);
+	(void)io::printfn("    %s 10.0.0.5 -p 1-1024 --closed", PROGRAM);
+	io::printn("");
 }
