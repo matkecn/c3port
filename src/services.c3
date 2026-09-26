@@ -142,10 +142,17 @@ const usz DEFAULT_TOP_COUNT = 100;
 <*
  Look up a service name for a port.
 
+ This is a two value return rather than a `String?` on purpose. `String` is a
+ struct, and a zero initialised `String?` is indistinguishable from a present
+ empty string, so an optional return cannot express "no such port" reliably.
+ The caller passes in the text it wants for an unknown port instead, which
+ also keeps the placeholder in one place.
+
  @param port : "the TCP port number"
- @return "the service name, or null if the port is not in the table"
+ @param out : "receives the service name when the port is in the table"
+ @return "true when the port was found"
 *>
-fn String? name_of(int port)
+fn bool name_of(int port, String* out)
 {
 	usz low = 0;
 	usz high = KNOWN.len;
@@ -153,7 +160,11 @@ fn String? name_of(int port)
 	{
 		usz mid = low + (high - low) / 2;
 		int candidate = KNOWN[mid].port;
-		if (candidate == port) return KNOWN[mid].name;
+		if (candidate == port)
+		{
+			*out = KNOWN[mid].name;
+			return true;
+		}
 		if (candidate < port)
 		{
 			low = mid + 1;
@@ -163,6 +174,5 @@ fn String? name_of(int port)
 			high = mid;
 		}
 	}
-	String? missing;
-	return missing;
+	return false;
 }
