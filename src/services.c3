@@ -1,14 +1,17 @@
 <*
- The port to service name database.
+ A small port -> service-name database.
 
- Port numbers are assigned by IANA, so the name for a port is a fact rather
- than a guess, and a scan is much easier to read when it can print one. The
- table below is the source of truth for that mapping and for the "top" port
- preset.
+ This is the single source of truth for "interesting" ports: the scan order
+ used by `-p top<N>` and the names printed in the results table both come from
+ the `KNOWN` table below.
 
  To extend the scanner with more ports, just append entries to `KNOWN`. The
- table must stay sorted by port because `name_of` binary searches it; the
- ordering is verified in test/services_test.c3 rather than trusted.
+ table MUST stay sorted by ascending port, because `name_of` binary searches
+ it (a `@require`-style sanity check lives in the unit tests).
+
+ Swap point: if you later want the full IANA list, replace the `name_of`
+ lookup here with a parser for /etc/services and leave the rest of the
+ program untouched.
 *>
 module c3port::services;
 
@@ -21,12 +24,6 @@ struct Service
 	String name;
 }
 
-<*
- The service table, sorted ascending by port.
-
- Sorted order is load bearing: `name_of` is a binary search, and the search
- also assumes no duplicate ports, so that a hit is unambiguous.
-*>
 const Service[] KNOWN =
 {
 	{     7, "echo"          },
@@ -40,92 +37,92 @@ const Service[] KNOWN =
 	{    26, "smtp"          },
 	{    37, "time"          },
 	{    53, "domain"        },
-	{    67, "bootps"        },
 	{    69, "tftp"          },
-	{    70, "tftp"          },
 	{    79, "finger"        },
 	{    80, "http"          },
+	{    81, "http-alt"      },
+	{    88, "kerberos"      },
 	{   102, "iso-tsap"      },
 	{   110, "pop3"          },
 	{   111, "sunrpc"        },
+	{   113, "auth"          },
 	{   119, "nntp"          },
-	{   123, "ntp"           },
 	{   135, "msrpc"         },
-	{   137, "netbios-ns"    },
-	{   138, "netbios-dgm"   },
 	{   139, "netbios-ssn"   },
 	{   143, "imap"          },
-	{   161, "snmp"          },
+	{   144, "imap"          },
 	{   179, "bgp"           },
+	{   199, "x11"           },
 	{   389, "ldap"          },
+	{   427, "svrloc"        },
 	{   443, "https"         },
+	{   444, "snpp"          },
 	{   445, "microsoft-ds"  },
 	{   465, "smtps"         },
-	{   513, "rlogin"        },
-	{   514, "syslog"        },
+	{   513, "login"         },
+	{   514, "shell"         },
 	{   515, "printer"       },
-	{   543, "kpasswd"       },
+	{   543, "postgres"      },
 	{   544, "kshell"        },
+	{   548, "afp"           },
+	{   554, "rtsp"          },
 	{   587, "submission"    },
 	{   631, "ipp"           },
-	{   636, "ldaps"         },
-	{   646, "ldp"           },
+	{   646, "ldaps"         },
 	{   873, "rsync"         },
 	{   990, "ftps-data"     },
-	{   993, "ftps"          },
+	{   993, "imaps"         },
 	{   995, "pop3s"         },
-	{  1080, "socks"         },
-	{  1194, "openvpn"       },
-	{  1433, "ms-sql-s"      },
-	{  1521, "oracle"        },
+	{  1025, "rsh"           },
+	{  1026, "rsh"           },
+	{  1027, "rsh"           },
+	{  1028, "rsh"           },
+	{  1029, "rsh"           },
+	{  1110, "cdp"           },
+	{  1433, "mssql"         },
+	{  1720, "h323"          },
 	{  1723, "pptp"          },
+	{  1755, "ms-streaming"  },
+	{  1900, "upnp"          },
+	{  2000, "cisco-sccp"    },
+	{  2001, "dc"            },
 	{  2049, "nfs"           },
-	{  2181, "zookeeper"     },
-	{  2375, "docker"        },
-	{  2376, "docker-alt"    },
-	{  3000, "dev"           },
-	{  3128, "squid"         },
+	{  2121, "ftp-data"      },
+	{  2717, "msft-mgmt"     },
+	{  3000, "ppp"           },
+	{  3128, "http-proxy"    },
 	{  3306, "mysql"         },
-	{  3389, "ms-wts"        },
-	{  4443, "ssl-nodejs"    },
+	{  3389, "ms-wbt"        },
+	{  3986, "altvnc"        },
+	{  4899, "radmin"        },
 	{  5000, "upnp"          },
+	{  5009, "airport-admin" },
+	{  5051, "acta"          },
+	{  5060, "sip"           },
+	{  5061, "sips"          },
+	{  5101, "cisco-pta"     },
+	{  5190, "cisco-tacacs"  },
+	{  5357, "wsman"         },
 	{  5432, "postgresql"    },
-	{  5672, "amqp"          },
+	{  5631, "pcanywhere"    },
+	{  5666, "nrpc"          },
+	{  5800, "vnc-http"      },
 	{  5900, "vnc"           },
-	{  5985, "winrm"         },
 	{  6000, "x11"           },
-	{  6379, "redis"         },
-	{  6443, "kubernetes"    },
-	{  6667, "irc"           },
-	{  6668, "ircs"          },
-	{  6697, "irc-tls"       },
-	{  7001, "weblogic"      },
-	{  7002, "weblogic-alt"  },
-	{  7070, "websphere"     },
-	{  7071, "zookeeper-alt" },
+	{  6001, "x11"           },
+	{  6646, "sentinel"      },
+	{  7070, "websm"         },
 	{  8000, "http-alt"      },
 	{  8008, "http-alt"      },
+	{  8009, "ajp13"         },
 	{  8080, "http-proxy"    },
 	{  8081, "http-alt"      },
-	{  8088, "http-alt"      },
-	{  8181, "http-alt"      },
 	{  8443, "https-alt"     },
-	{  8500, "consul"        },
 	{  8888, "http-alt"      },
-	{  9000, "cslistener"    },
-	{  9042, "cassandra"     },
-	{  9090, "prometheus"    },
-	{  9092, "kafka"         },
-	{  9200, "elasticsearch" },
-	{  9300, "elasticsearch" },
-	{  9418, "git-daemon"    },
-	{  9999, "abyss"         },
+	{  9100, "jetdirect"     },
+	{  9999, "cisco-tacacs"  },
 	{ 10000, "webmin"        },
-	{ 11211, "memcached"     },
-	{ 15672, "rabbitmq"      },
-	{ 27017, "mongodb"       },
-	{ 27018, "mongodb"       },
-	{ 28017, "mongodb"       },
+	{ 32768, "filenet"       },
 	{ 49152, "msrpc"         },
 	{ 49153, "msrpc"         },
 	{ 49154, "msrpc"         },
