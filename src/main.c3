@@ -52,7 +52,7 @@ fn int main(String[] args)
 	target::Resolution resolved = maybe!!;
 	defer resolved.close();
 
-	scanner::Report scan;
+	scanner::Report* scan;
 	scan.init(mem);
 	defer scan.free();
 	scan.target = options.target;
@@ -61,12 +61,12 @@ fn int main(String[] args)
 	scan.show_filtered = options.show_filtered;
 	scan.show_verbose = options.verbose;
 
-	scanner::run(&scan, &resolved, requested.ports, options.timeout);
+	scanner::run(scan, &resolved, requested.ports, options.timeout);
 
-	report::print_header(&scan, &options);
-	report::print_addresses(&scan);
-	report::print_results(&scan, &options);
-	report::print_summary(&scan);
+	report::print_header(scan, &options);
+	report::print_addresses(scan);
+	report::print_results(scan, &options);
+	report::print_summary(scan);
 
 	return scan.open_count > 0 ? EXIT_OK : EXIT_NO_OPEN_PORTS;
 }
