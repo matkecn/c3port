@@ -8,10 +8,10 @@ small: one file per concern, no dependencies beyond the C3 standard library, and
 a test suite for the parts where a mistake is silent.
 
 ```console
-$ c3port 127.0.0.1 -p 22,80,443,8080 -c -v
+$ c3port 127.0.0.1 -p 22,80,443,3333 -c -v
 
 c3port 0.1.0 - scanning 127.0.0.1
-ports: 22,80,443,8080 (4)   timeout: 1000ms   family: auto   states: open+closed
+ports: 22,80,443,3333 (4)   timeout: 1000ms   family: auto   states: open+closed
 
 resolved 1 address:
   127.0.0.1
@@ -20,7 +20,7 @@ PORT        STATE     SERVICE     ADDRESS                      TIME
 22/tcp      closed    ssh         127.0.0.1                      0ms  [code 61]
 80/tcp      open      http        127.0.0.1                      0ms
 443/tcp      closed    https      127.0.0.1                      0ms  [code 61]
-8080/tcp    open      -           127.0.0.1                      0ms
+3333/tcp    open      -           127.0.0.1                      0ms
 
 Scanned 4 port(s) across 1 address(es) in 223us
 2 open, 2 closed, 0 filtered, 0 error
