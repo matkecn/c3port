@@ -311,3 +311,68 @@ fn ParseError add_top(PortBuf* buf, String suffix)
 	}
 	return ParseError.NONE;
 }
+
+<*
+ Parse a port specification into a duplicate-free list.
+
+ @param allocator : "owns the returned slice; release it with allocator.free"
+ @param spec : "the raw user string, for example 1-1024,8080 or top100"
+ @param max_ports : "upper bound on how many ports the spec may expand to"
+ @return "a PortSet; check `error` before using `ports`"
+*>
+fn PortSet parse(Allocator allocator, String spec, sz max_ports = PORT_SPACE)
+{
+	String trimmed = spec.trim();
+	if (trimmed.len == 0) return failed(ParseError.EMPTY);
+	if (max_ports <= 0) return failed(ParseError.TOO_MANY);
+
+	PortBuf buf;
+	if (!buf.init(allocator, max_ports)) return failed(ParseError.NO_MEMORY);
+	defer buf.free();
+
+	SeenSet seen;
+
+	ParseError error;
+	if (trimmed == ALL_KEYWORD)
+	{
+		error = add_range(&buf, &seen, PORT_MIN, PORT_MAX);
+	}
+	else if (trimmed.starts_with(TOP_KEYWORD))
+	{
+		// C3 range slices include both ends, so the text after "top" is
+		// [3..len - 1] and the bare "top" keyword has nothing after it at all.
+		String suffix = trimmed.len > TOP_KEYWORD.len
+			? trimmed[TOP_KEYWORD.len..trimmed.len - 1]
+			: "";
+		error = add_top(&buf, suffix);
+	}
+	else
+	{
+		error = add_list(&buf, &seen, trimmed);
+	}
+
+	if (error != ParseError.NONE) return failed(error);
+
+	// Hand back an exactly sized copy, so the caller is not tied to our
+	// over-allocated capacity and `buf.free` leaves nothing behind.
+	usz[]? exact = alloc::alloc_array_try(allocator, usz, buf.len);
+	if (!@ok(exact)) return failed(ParseError.NO_MEMORY);
+	exact!![..] = buf.data[:buf.len];
+	return { .ports = exact!!, .error = ParseError.NONE };
+}
+
+<*
+ A short, user-facing explanation of a parse failure.
+*>
+fn String describe(ParseError error)
+{
+	switch (error)
+	{
+		case ParseError.NONE: return "no error";
+		case ParseError.EMPTY: return "the port list is empty";
+		case ParseError.INVALID: return "expected something like 22, 1-1024, 80,443 or top100";
+		case ParseError.OUT_OF_RANGE: return "port numbers must be between 1 and 65535";
+		case ParseError.TOO_MANY: return "that expands to more ports than allowed";
+		case ParseError.NO_MEMORY: return "out of memory while building the port list";
+	}
+}
