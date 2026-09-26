@@ -89,3 +89,33 @@ fn void print_results(scanner::Report* report, cli::Options* options)
 		}
 	}
 }
+
+<*
+ The trailing totals: how long the scan took and what it found.
+
+ The filtered and error counts are always shown even when those findings were
+ not stored, so the numbers add up to what was actually probed.
+*>
+fn void print_summary(scanner::Report* report)
+{
+	(void)io::printn("");
+	(void)io::printfn("Scanned %d port(s) across %d address(es) in %s",
+		report.ports_requested, report.endpoints.size, duration_text(report.elapsed));
+	(void)io::printfn("%d open, %d closed, %d filtered, %d error",
+		report.open_count, report.closed_count, report.filtered_count, report.error_count);
+}
+
+fn String port_text(usz port) => string::format(tmem, "%d/tcp", port);
+
+<*
+ Format a duration compactly, picking a unit that keeps the number readable.
+ A local loop scan reports single digit microseconds, a remote one reports
+ hundreds of milliseconds, and neither wants seven digits on screen.
+*>
+fn String duration_text(Duration duration)
+{
+	long us = (long)duration;
+	if (us < 1_000) return string::format(tmem, "%dus", us);
+	if (us < 1_000_000) return string::format(tmem, "%dms", us / 1_000);
+	return string::format(tmem, "%.1fs", (double)us / 1_000_000.0);
+}
