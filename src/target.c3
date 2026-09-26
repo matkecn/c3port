@@ -79,3 +79,20 @@ fn void Resolution.close(&self)
 		self.count = 0;
 	}
 }
+
+<*
+ Overwrite the port field of a raw sockaddr buffer.
+
+ This is the single place that knows the port's byte layout, so the scanner
+ can hand around a `char[]` sockaddr without caring about the details.
+*>
+macro void set_port_raw(char[] addr, int port)
+{
+	addr[SOCKADDR_PORT_OFFSET] = (char)((usz)port >> 8);
+	addr[SOCKADDR_PORT_OFFSET + 1] = (char)((usz)port & 0xff);
+}
+
+<*
+ Overwrite the port field of this endpoint's sockaddr template.
+*>
+macro void Endpoint.set_port(Endpoint* self, int port) => set_port_raw(&self.addr, port);
