@@ -8,22 +8,21 @@ small: one file per concern, no dependencies beyond the C3 standard library, and
 a test suite for the parts where a mistake is silent.
 
 ```console
-$ c3port 127.0.0.1 -p 22,80,443,3333 -c -v
+$ c3port 127.0.0.1 -p 22,18099,3333 -c -v
 
 c3port 0.1.0 - scanning 127.0.0.1
-ports: 22,80,443,3333 (4)   timeout: 1000ms   family: auto   states: open+closed
+ports: 22,18099,3333 (3)   timeout: 1000ms   family: auto   states: open+closed
 
 resolved 1 address:
   127.0.0.1
 
-PORT        STATE     SERVICE     ADDRESS                      TIME
-22/tcp      closed    ssh         127.0.0.1                      0ms  [code 61]
-80/tcp      open      http        127.0.0.1                      0ms
-443/tcp      closed    https      127.0.0.1                      0ms  [code 61]
-3333/tcp    open      -           127.0.0.1                      0ms
+PORT        STATE     SERVICE          ADDRESS                      TIME
+22/tcp      closed    ssh              127.0.0.1                      0ms  [code 61]
+18099/tcp   open      -                127.0.0.1                      0ms
+3333/tcp    closed    -                127.0.0.1                      0ms  [code 61]
 
-Scanned 4 port(s) across 1 address(es) in 223us
-2 open, 2 closed, 0 filtered, 0 error
+Scanned 3 port(s) across 1 address(es) in 817us
+1 open, 2 closed, 0 filtered, 0 error
 ```
 
 ## Requirements
@@ -141,11 +140,13 @@ a five character string is the whole string. `s[..]` is the open ended form.
 | `src/scanner.c3` | orchestration, counters, display filters |
 | `src/report.c3` | terminal output |
 
-The dependency direction is one way: `main` calls into the modules, `scanner`
-uses `probe` / `target` / `services`, and `ports` and `services` depend on
-nothing but the standard library. Nothing below `scanner` knows about
-formatting, and nothing but `target` knows about sockets, so each piece can be
-changed or tested on its own.
+The dependency direction is one way. `main` calls into the modules. `scanner`
+uses `probe`, `target` and `services`; `report` only reads the `Report` struct;
+`probe` uses `target` for the endpoint it connects to. At the bottom,
+`services` depends on nothing at all, and `ports` depends only on `services`,
+because the `top` preset is defined as a prefix of the service table. Nothing
+below `scanner` knows about formatting, and only `probe` and `target` know
+about sockets, so each piece can be changed or tested on its own.
 
 ## Extending it
 
@@ -155,7 +156,7 @@ must stay sorted by port, since `name_of` binary searches it;
 
 **Add a port spec form.** Add a keyword branch in `ports::parse` and a parser
 that returns a `ParseError`. Add the cases to `ports::describe` at the same
-time; the tests check no error is left undescribed.
+time; `test_describe_covers_every_error` fails if a new error goes undescribed.
 
 **Add a probe method.** UDP or ICMP would be a new state in `probe::PortState`
 plus a `probe::probe_*` function, then a `case` in `Report.wants` and in
@@ -170,4 +171,5 @@ require changes to any other file.
 
 ## Legal
 
-`LICENSE` is empty. Add your licence before publishing.
+No licence has been chosen yet, so `LICENSE` is empty and the repository is
+currently unlicensed. Add one before relying on this for anything.
