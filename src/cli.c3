@@ -65,7 +65,7 @@ fn Outcome parse(String[] args, Options* options)
 {
 	options.target = "";
 	options.port_spec = DEFAULT_PORT_SPEC;
-	options.timeout = millis(DEFAULT_TIMEOUT_MS);
+	options.timeout = DEFAULT_TIMEOUT_MS * time::MS;
 	options.ip_version = IpVersion.AUTO;
 	options.show_closed = false;
 	options.show_filtered = false;
@@ -197,7 +197,7 @@ fn Outcome parse_switch(String arg, String[] args, usz* index, Options* options)
 			(void)io::eprintfn("%s: --timeout expects a positive number of milliseconds, got '%s'", PROGRAM, value);
 			return Outcome.ERROR;
 		}
-		options.timeout = millis(ms!!);
+		options.timeout = ms!! * time::MS;
 		return Outcome.SCAN;
 	}
 
@@ -245,8 +245,8 @@ fn void print_usage()
 	(void)io::printn("    <host>                hostname or IP literal to scan");
 	(void)io::printn("");
 	(void)io::printn("OPTIONS");
-	(void)io::printn("    -p, --ports <spec>    which ports to scan (default: %s)", DEFAULT_PORT_SPEC);
-	(void)io::printn("    -t, --timeout <ms>    per port connect timeout in ms (default: %d)", DEFAULT_TIMEOUT_MS);
+	(void)io::printfn("    -p, --ports <spec>    which ports to scan (default: %s)", DEFAULT_PORT_SPEC);
+	(void)io::printfn("    -t, --timeout <ms>    per port connect timeout in ms (default: %d)", DEFAULT_TIMEOUT_MS);
 	(void)io::printn("    -4                    resolve to IPv4 addresses only");
 	(void)io::printn("    -6                    resolve to IPv6 addresses only");
 	(void)io::printn("    -a, --all-states      show closed, filtered and error ports too");
