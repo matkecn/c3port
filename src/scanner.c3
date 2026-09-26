@@ -90,3 +90,62 @@ fn bool Report.wants(Report* self, probe::PortState state)
 		case probe::PortState.ERROR: return self.show_verbose;
 	}
 }
+
+<*
+ Run a scan.
+
+ @param report : "where the results are written; also supplies the filters"
+ @param resolution : "the resolved addresses to probe; not owned, not freed"
+ @param ports : "the ports to try, in order"
+ @param timeout : "per port connect timeout"
+*>
+fn void run(Report* report, target::Resolution* resolution, usz[] ports, Duration timeout)
+{
+	Clock started = clock::now();
+	report.ports_requested = ports.len;
+
+	// Materialise every endpoint *before* probing. The list reallocates as it
+	// grows, and `probe` needs a stable `Endpoint*` to work from; once this
+	// loop is done the entries never move again.
+	for (net::os::AddrInfo* node = resolution.list; node; node = node.ai_next)
+	{
+		report.endpoints.push(target::make_endpoint(node));
+	}
+
+	foreach (usz port : ports)
+	{
+		for (sz i = 0; i < report.endpoints.size; i++)
+		{
+			target::Endpoint* ep = &report.endpoints.entries[i];
+			probe::Outcome outcome = probe::probe(ep, (int)port, timeout);
+
+			count(report, outcome.state);
+			if (report.wants(outcome.state))
+			{
+				String service = UNKNOWN_SERVICE;
+				(void)services::name_of((int)port, &service);
+				report.findings.push({
+					.port = port,
+					.state = outcome.state,
+					.address = ep.address(),
+					.service = service,
+					.elapsed = outcome.elapsed,
+					.detail = outcome.detail,
+				});
+			}
+		}
+	}
+
+	report.elapsed = started.to_now().to_duration();
+}
+
+fn void count(Report* report, probe::PortState state)
+{
+	switch (state)
+	{
+		case probe::PortState.OPEN: report.open_count++;
+		case probe::PortState.CLOSED: report.closed_count++;
+		case probe::PortState.FILTERED: report.filtered_count++;
+		case probe::PortState.ERROR: report.error_count++;
+	}
+}
