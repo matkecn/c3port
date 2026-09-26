@@ -34,3 +34,58 @@ fn String family_name(cli::IpVersion version)
 		case cli::IpVersion.AUTO: return "auto";
 	}
 }
+
+<*
+ The list of addresses the host resolved to, so it is obvious how many hosts
+ are really being scanned and which family each result came from.
+*>
+fn void print_addresses(scanner::Report* report)
+{
+	if (report.endpoints.size == 0) return;
+
+	(void)io::printfn("");
+	if (report.endpoints.size == 1)
+	{
+		(void)io::printn("resolved 1 address:");
+	}
+	else
+	{
+		(void)io::printfn("resolved %d addresses:", report.endpoints.size);
+	}
+
+	for (sz i = 0; i < report.endpoints.size; i++)
+	{
+		(void)io::printfn("  %s", report.endpoints.entries[i].address());
+	}
+}
+
+<*
+ The results table. Prints nothing when no finding passed the filters, so a
+ scan that found nothing but closed ports says so in one line below.
+*>
+fn void print_results(scanner::Report* report, cli::Options* options)
+{
+	(void)io::printn("");
+	if (report.findings.size == 0)
+	{
+		(void)io::printn("no results matched the selected states");
+		return;
+	}
+
+	(void)io::printn("PORT        STATE     SERVICE          ADDRESS                      TIME");
+	for (usz i = 0; i < report.findings.size; i++)
+	{
+		scanner::Finding* finding = &report.findings.entries[i];
+		(void)io::printfn("%s   %s   %s   %s   %s",
+			port_text(finding.port),
+			probe::state_name(finding.state),
+			finding.service,
+			finding.address,
+			duration_text(finding.elapsed));
+
+		if (options.verbose && finding.detail != 0)
+		{
+			(void)io::printfn("            [code %d]", finding.detail);
+		}
+	}
+}
