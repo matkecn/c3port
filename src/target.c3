@@ -96,3 +96,74 @@ macro void set_port_raw(char[] addr, int port)
  Overwrite the port field of this endpoint's sockaddr template.
 *>
 macro void Endpoint.set_port(Endpoint* self, int port) => set_port_raw(&self.addr, port);
+
+const char[16] HEX_DIGITS = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+
+<*
+ A cursor over an endpoint's `label` buffer.
+
+ An explicit writer rather than repeated string formatting because the IPv6
+ form needs to skip groups entirely, which a single format string cannot do.
+ Writes past the end of the buffer are dropped, so `finish` always has room
+ for the NUL.
+*>
+struct LabelWriter
+{
+	char[] buf;
+	usz pos;
+}
+
+macro void LabelWriter.put(LabelWriter* self, char c)
+{
+	if (self.pos + 1 < self.buf.len) self.buf[self.pos++] = c;
+}
+
+<*
+ Append `value` in decimal.
+*>
+fn void LabelWriter.put_number(LabelWriter* self, usz value)
+{
+	char[20] digits;
+	usz count = 0;
+	do
+	{
+		digits[count++] = (char)('0' + value % 10);
+		value /= 10;
+	} while (value > 0);
+	for (usz i = 0; i < count; i++)
+	{
+		self.put(digits[count - i - 1]);
+	}
+}
+
+<*
+ Append `value` in lowercase hex with no leading zeros. Zero renders as "0".
+*>
+fn void LabelWriter.put_hex(LabelWriter* self, usz value)
+{
+	char[16] chars;
+	usz count = 0;
+	do
+	{
+		chars[count++] = HEX_DIGITS[value & 0xf];
+		value >>= 4;
+	} while (value > 0);
+	for (usz i = 0; i < count; i++)
+	{
+		self.put(chars[count - i - 1]);
+	}
+}
+
+<*
+ The write position, clamped so the caller can always store a NUL there.
+*>
+macro usz LabelWriter.finish(LabelWriter* self)
+{
+	return self.pos < self.buf.len - 1 ? self.pos : self.buf.len - 1;
+}
+
+<*
+ Reinterpret a sockaddr byte as an unsigned value. `char` is signed on most
+ platforms, so a plain cast would turn 200 into -56.
+*>
+macro usz octet(char byte) => (usz)(byte & 0xff);
