@@ -205,3 +205,25 @@ fn Outcome parse_switch(String arg, String[] args, usz* index, Options* options)
 	(void)io::eprintfn("Try '%s --help' for more information.", PROGRAM);
 	return Outcome.ERROR;
 }
+
+<*
+ Get the value for a switch, from either --opt=value or the next argument.
+
+ @param inline_value : "the part after '=', empty if there was none"
+ @param args : "argv"
+ @param index : "cursor, advanced when a following argument is consumed"
+ @param arg : "the switch as typed, for the error message"
+ @return "the value, or empty on error with the reason already printed"
+*>
+fn String take_value(String inline_value, String[] args, usz* index, String arg)
+{
+	if (inline_value.len > 0) return inline_value;
+
+	if (*index + 1 >= args.len)
+	{
+		(void)io::eprintfn("%s: %s needs a value", PROGRAM, arg);
+		return "";
+	}
+	*index += 1;
+	return args[*index];
+}
