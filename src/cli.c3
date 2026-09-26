@@ -10,7 +10,7 @@
 *>
 module c3port::cli;
 
-import std::io, std::net;
+import std::io, std::net, std::time;
 
 const String PROGRAM = "c3port";
 const String VERSION = "0.1.0";
