@@ -51,3 +51,31 @@ struct Resolution
 	os::AddrInfo* list;
 	usz count;
 }
+
+<*
+ Resolve `host` to a chain of endpoints.
+
+ @param host : "a hostname, IPv4 literal or IPv6 literal"
+ @param version : "which address family to ask for"
+ @return "an owned resolution, or a fault if the name does not resolve"
+*>
+fn Resolution? resolve(String host, net::IpProtocol version)
+{
+	// Port 0: we only want the address here, the port is patched per probe.
+	os::AddrInfo* list = net::addrinfo(host, 0, version.ai_family, os::SOCK_STREAM)!;
+
+	usz count = 0;
+	for (os::AddrInfo* node = list; node; node = node.ai_next) count++;
+
+	return { .list = list, .count = count };
+}
+
+fn void Resolution.close(&self)
+{
+	if (self.list)
+	{
+		os::freeaddrinfo(self.list);
+		self.list = null;
+		self.count = 0;
+	}
+}
