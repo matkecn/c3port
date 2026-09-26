@@ -53,3 +53,63 @@ fn net::IpProtocol Options.protocol(Options* self)
 		case IpVersion.AUTO: return net::IpProtocol.UNSPECIFIED;
 	}
 }
+
+<*
+ Parse the command line.
+
+ @param args : "argv, including the program name at index 0"
+ @param options : "receives the parsed options when the result is SCAN"
+ @return "SCAN, EXIT or ERROR"
+*>
+fn Outcome parse(String[] args, Options* options)
+{
+	options.target = "";
+	options.port_spec = DEFAULT_PORT_SPEC;
+	options.timeout = millis(DEFAULT_TIMEOUT_MS);
+	options.ip_version = IpVersion.AUTO;
+	options.show_closed = false;
+	options.show_filtered = false;
+	options.show_all = false;
+	options.verbose = false;
+
+	usz positionals = 0;
+	for (usz i = 1; i < args.len; i++)
+	{
+		String arg = args[i];
+
+		if (arg == "-")
+		{
+			// A bare dash is a hostname in some tools; treat it as one rather
+			// than silently ignoring the argument.
+			options.target = arg;
+			positionals++;
+			continue;
+		}
+
+		if (arg.starts_with("-"))
+		{
+			Outcome outcome = parse_switch(arg, args, &i, options);
+			if (outcome != Outcome.SCAN) return outcome;
+			continue;
+		}
+
+		if (positionals > 0)
+		{
+			(void)io::eprintfn("%s: unexpected extra argument '%s'", PROGRAM, arg);
+			(void)io::eprintfn("Only one target may be given at a time.");
+			return Outcome.ERROR;
+		}
+		options.target = arg;
+		positionals++;
+	}
+
+	if (options.target.len == 0)
+	{
+		(void)io::eprintfn("%s: no target given.", PROGRAM);
+		(void)io::eprintfn("Usage: %s <host> [-p ports] [options]", PROGRAM);
+		(void)io::eprintfn("Try '%s --help' for more information.", PROGRAM);
+		return Outcome.ERROR;
+	}
+
+	return Outcome.SCAN;
+}
