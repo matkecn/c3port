@@ -111,3 +111,36 @@ fn bool grow(PortBuf* self)
 	self.cap = cap;
 	return true;
 }
+
+<*
+ A minimal fixed-size bit set over the whole port space.
+
+ Used to drop duplicate ports without an O(n^2) scan, and to keep the
+ parser allocation free. Costs 8 KiB of stack.
+*>
+struct SeenSet
+{
+	usz[PORT_SPACE / 64] words;
+}
+
+macro void SeenSet.mark(SeenSet* self, usz bit)
+{
+	self.words[bit / 64] |= (usz)1 << (bit % 64);
+}
+
+macro bool SeenSet.contains(SeenSet* self, usz bit)
+{
+	return (self.words[bit / 64] & ((usz)1 << (bit % 64))) != 0;
+}
+
+<*
+ Append a port unless it was already collected. Returns false when the cap
+ is reached, so the caller can report TOO_MANY once.
+*>
+fn bool push_unique(PortBuf* buf, SeenSet* seen, usz port)
+{
+	if (port < (usz)PORT_MIN || port > (usz)PORT_MAX) return true;
+	if (seen.contains(port)) return true;
+	seen.mark(port);
+	return buf.push(port);
+}
