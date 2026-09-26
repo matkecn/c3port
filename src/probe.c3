@@ -37,3 +37,56 @@ struct Outcome
 	Duration elapsed;
 	int detail;   // the errno style code, only shown with --verbose
 }
+
+<*
+ Human readable state name, for the results table.
+*>
+fn String state_name(PortState state)
+{
+	switch (state)
+	{
+		case PortState.OPEN: return "open";
+		case PortState.CLOSED: return "closed";
+		case PortState.FILTERED: return "filtered";
+		case PortState.ERROR: return "error";
+	}
+}
+
+<*
+ Is this errno one of the "the connect is still on its way" codes?
+
+ A non-blocking connect returns immediately with one of these when the answer
+ is not ready yet, which is the normal case for any host that is not on the
+ local machine.
+*>
+macro bool is_connect_in_flight(int err)
+{
+	// EWOULDBLOCK is the same value as EAGAIN on Linux and macOS, so the
+	// second test is redundant there but not on every platform.
+	return err == libc::Errno.EINPROGRESS
+		|| err == libc::Errno.EAGAIN
+		|| err == libc::Errno.EWOULDBLOCK
+		|| err == libc::Errno.EALREADY;
+}
+
+<*
+ Turn a connect errno into a port state.
+
+ The distinction that matters most is ECONNREFUSED, which is a definite answer
+ from the host, versus a timeout or an unreachable network, which is silence
+ and so usually means a firewall dropped the packet.
+*>
+fn PortState classify_error(int err)
+{
+	switch (err)
+	{
+		case libc::Errno.ECONNREFUSED: return PortState.CLOSED;
+		case libc::Errno.ECONNRESET: return PortState.CLOSED;
+		case libc::Errno.EHOSTUNREACH: return PortState.FILTERED;
+		case libc::Errno.ENETUNREACH: return PortState.FILTERED;
+		case libc::Errno.ENETDOWN: return PortState.FILTERED;
+		case libc::Errno.ETIMEDOUT: return PortState.FILTERED;
+		case libc::Errno.EACCES: return PortState.FILTERED;   // a local firewall ate it
+		default: return PortState.ERROR;
+	}
+}
