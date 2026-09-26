@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # C3 links through the system C compiler, so it has to be present even
+      # though every line of this project is C3.
+      - name: Install the C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libc6-dev
+
+      - name: Install the C3 compiler
+        run: |
+          curl -fsSL https://github.com/c3lang/c3c/releases/latest/download/c3-linux-static.tar.gz \
+            | sudo tar -xz -C /opt
+          echo "/opt/c3" >> "$GITHUB_PATH"
+
+      - name: Report the compiler version
+        run: c3c --version
+
+      - name: Build
+        run: c3c build
+
+      - name: Test
+        run: c3c test
+
+      - name: Check --help and --version run
+        run: |
+          ./build/c3port --version
+          ./build/c3port --help
