@@ -73,7 +73,7 @@ fn void print_results(scanner::Report* report, cli::Options* options)
 	}
 
 	(void)io::printn("PORT        STATE     SERVICE          ADDRESS                      TIME");
-	for (usz i = 0; i < report.findings.size; i++)
+	for (sz i = 0; i < report.findings.size; i++)
 	{
 		scanner::Finding* finding = &report.findings.entries[i];
 		(void)io::printfn("%s   %s   %s   %s   %s",
