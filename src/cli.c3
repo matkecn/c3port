@@ -227,3 +227,46 @@ fn String take_value(String inline_value, String[] args, usz* index, String arg)
 	*index += 1;
 	return args[*index];
 }
+
+<*
+ Print the usage text.
+
+ The port spec grammar is documented here rather than only in the README,
+ because this is the one screen a user sees when they get something wrong.
+*>
+fn void print_usage()
+{
+	(void)io::printfn("%s %s - a small TCP connect port scanner", PROGRAM, VERSION);
+	(void)io::printn("");
+	(void)io::printn("USAGE");
+	(void)io::printn("    c3port <host> [-p <ports>] [options]");
+	(void)io::printn("");
+	(void)io::printn("ARGUMENTS");
+	(void)io::printn("    <host>                hostname or IP literal to scan");
+	(void)io::printn("");
+	(void)io::printn("OPTIONS");
+	(void)io::printn("    -p, --ports <spec>    which ports to scan (default: %s)", DEFAULT_PORT_SPEC);
+	(void)io::printn("    -t, --timeout <ms>    per port connect timeout in ms (default: %d)", DEFAULT_TIMEOUT_MS);
+	(void)io::printn("    -4                    resolve to IPv4 addresses only");
+	(void)io::printn("    -6                    resolve to IPv6 addresses only");
+	(void)io::printn("    -a, --all-states      show closed, filtered and error ports too");
+	(void)io::printn("    -c, --closed          also show closed ports");
+	(void)io::printn("    -f, --filtered        also show filtered ports");
+	(void)io::printn("    -v, --verbose         add timing and error detail per port");
+	(void)io::printn("    -h, --help            show this help");
+	(void)io::printn("        --version         show the version");
+	(void)io::printn("");
+	(void)io::printn("PORT SPEC");
+	(void)io::printn("    22                    a single port");
+	(void)io::printn("    1-1024                an inclusive range");
+	(void)io::printn("    8000-                 8000 up to 65535");
+	(void)io::printn("    80,443,8080           a comma separated mix of the above");
+	(void)io::printn("    top                   the 100 most commonly used ports");
+	(void)io::printn("    top<n>                the first <n> ports from that list");
+	(void)io::printn("    all                   every port from 1 to 65535");
+	(void)io::printn("");
+	(void)io::printn("EXAMPLES");
+	(void)io::printn("    c3port 127.0.0.1");
+	(void)io::printn("    c3port scanme.example -p 22,80,443 -t 2000");
+	(void)io::printn("    c3port 10.0.0.5 -p 1-1024 --closed");
+}
