@@ -245,3 +245,69 @@ fn ParseError add_list(PortBuf* buf, SeenSet* seen, String spec)
 		start = comma + 1;
 	}
 }
+
+<*
+ Convert the `<n>` of a `top<n>` spec to a port count.
+
+ A count is not a port, so this deliberately does not reuse
+ `parse_port_number` and its 1..65535 check. Any count at or above the size of
+ the service table means the same thing, "scan the whole table", so large
+ values clamp here and cannot overflow.
+
+ @param text : "the digits that followed the top keyword"
+ @param out : "receives the clamped count on success"
+ @return "NONE on success, otherwise why the count was rejected"
+*>
+fn ParseError parse_count(String text, sz* out)
+{
+	if (text.len == 0) return ParseError.INVALID;
+	foreach (char c : text)
+	{
+		if (c < '0' || c > '9') return ParseError.INVALID;
+	}
+
+	sz ceiling = (sz)services::KNOWN.len;
+	sz value = 0;
+	foreach (char c : text)
+	{
+		// Stop as soon as the ceiling is reached. That keeps `value` small
+		// enough that the multiply below cannot overflow, whatever the user
+		// typed.
+		if (value >= ceiling) break;
+		value = value * 10 + (sz)(c - '0');
+		if (value >= ceiling)
+		{
+			value = ceiling;
+			break;
+		}
+	}
+
+	// "top0" would select nothing, which is a mistake rather than a request.
+	if (value == 0) return ParseError.INVALID;
+	*out = value;
+	return ParseError.NONE;
+}
+
+<*
+ Handle the `top`, `top100`, `top1000` forms. `suffix` is whatever followed
+ the "top" keyword and may be empty.
+*>
+fn ParseError add_top(PortBuf* buf, String suffix)
+{
+	sz count = (sz)services::DEFAULT_TOP_COUNT;
+	if (suffix.len > 0)
+	{
+		ParseError error = parse_count(suffix, &count);
+		if (error != ParseError.NONE) return error;
+	}
+
+	// Asking for more ports than are known is not an error; it just means
+	// "scan everything in the table".
+	if (count > (sz)services::KNOWN.len) count = (sz)services::KNOWN.len;
+
+	for (sz i = 0; i < count; i++)
+	{
+		if (!buf.push((usz)services::KNOWN[i].port)) return ParseError.TOO_MANY;
+	}
+	return ParseError.NONE;
+}
