@@ -76,7 +76,7 @@ fn PortBuf* PortBuf.init(PortBuf* self, Allocator allocator, sz limit)
 	self.limit = limit;
 	self.len = 0;
 	self.cap = limit < 64 ? limit : 64;
-	usz[]? data = allocator.alloc_array_try(usz, self.cap);
+	usz[]? data = alloc::alloc_array_try(allocator, usz, self.cap);
 	if (!@ok(data)) return null;
 	self.data = data!!;
 	return self;
