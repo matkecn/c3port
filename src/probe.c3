@@ -1,45 +1,119 @@
 <*
- A single TCP connect probe.
+ The one thing a port scanner actually does: try to open a TCP connection
+ and classify the outcome.
 
- One probe is: create a non-blocking socket, connect, wait for writability with
- a timeout, then read SO_ERROR to find out what the kernel thought. SO_ERROR is
- what distinguishes a refused connection from a successful one, because
- non-blocking connect reports "still in progress" for both.
+ This is a *connect* scan, which is the only kind that is both accurate and
+ portable without raw sockets. Every probe:
 
- The result is a plain enum rather than a fault. A closed or filtered port is
- the normal, expected outcome of a scan, not a program failure, so there is
- nothing to unwind and nothing for the caller to catch.
+   1. creates a non-blocking TCP socket,
+   2. starts a connect and lets it run in the background,
+   3. waits for it with `poll`, bounded by the caller's timeout,
+   4. reads SO_ERROR to find out how the attempt ended.
 
- This is where the libc dependency lives, and it is the only module that needs
- one: errno values are the standard way to say why a connect failed.
+ Using a non-blocking socket plus poll is what makes a timeout meaningful.
+ A plain blocking connect can hang for the kernel's full SYN retry period
+ (often 75+ seconds), which is useless for scanning.
+
+ Note on the data flow: results are reported through the `PortState` enum
+ rather than through C3 faults. Faults are fine for "the program could not
+ run", but a refused port is an ordinary, expected scan result, and keeping
+ it out of the error channel makes the scanner logic much easier to follow.
 *>
 module c3port::probe;
 
 import std::io, std::net, std::net::os, std::time, libc, c3port::target;
 
-<*
- What a probe concluded about a port.
-*>
 enum PortState
 {
-	OPEN,     // the connect completed
-	CLOSED,   // the host refused, so almost certainly nothing is listening
-	FILTERED, // dropped by something in between, or unreachable
-	ERROR,    // the probe itself failed
+	OPEN,       // the host completed a TCP handshake
+	CLOSED,     // the host actively refused the connection
+	FILTERED,   // no answer at all, or the network is unreachable
+	ERROR,      // the probe itself could not be carried out
 }
 
 <*
- The result of probing one port against one address.
+ The outcome of a single probe, plus enough detail to explain it in verbose
+ mode.
 *>
 struct Outcome
 {
 	PortState state;
 	Duration elapsed;
-	int detail;   // the errno style code, only shown with --verbose
+	int detail;   // errno-style value, 0 when there is nothing to report
 }
 
 <*
- Human readable state name, for the results table.
+ Probe one port on one endpoint.
+
+ @param ep : "the endpoint to connect to"
+ @param port : "the port to try"
+ @param timeout : "how long to wait for the connection to settle"
+*>
+fn Outcome probe(target::Endpoint* ep, int port, Duration timeout)
+{
+	Outcome outcome = { .state = PortState.ERROR, .elapsed = time::DURATION_ZERO, .detail = 0 };
+	Clock started = clock::now();
+
+	// A local copy of the template, so concurrent probes against the same
+	// endpoint cannot see each other's port.
+	char[target::SOCKADDR_MAX] addr = ep.addr;
+	target::set_port_raw(&addr, port);
+
+	net::os::NativeSocket fd = os::socket(ep.family, ep.socktype, ep.protocol);
+	if (!fd.is_valid())
+	{
+		return finish(&outcome, &started, PortState.ERROR, (int)libc::errno());
+	}
+	defer (void)fd.close();
+
+	// Without this a "timeout" would be the kernel's, not ours.
+	if (@catch(fd.set_non_blocking(true)))
+	{
+		return finish(&outcome, &started, PortState.ERROR, (int)libc::errno());
+	}
+
+	if (os::connect(fd, (net::os::SockAddrPtr)&addr, ep.addrlen) == 0)
+	{
+		// Connected before it could possibly block (typical on loopback).
+		return finish(&outcome, &started, PortState.OPEN, 0);
+	}
+
+	int err = (int)libc::errno();
+	if (!is_connect_in_flight(err))
+	{
+		return finish(&outcome, &started, classify_error(err), err);
+	}
+
+	// The connect is now running. Wait for it to become writable, which
+	// happens either when it succeeds or when the peer sends a RST.
+	net::Poll waiter = { .socket = fd, .events = net::PollSubscribe.ANY_WRITE };
+	usz ready = net::poll_ms((&waiter)[:1], timeout.to_ms()) ?? 0;
+
+	if (ready == 0)
+	{
+		// No event before the deadline: the packet was dropped somewhere, or
+		// poll() itself failed. Either way there is no answer from the host.
+		return finish(&outcome, &started, PortState.FILTERED, 0);
+	}
+
+	// SO_ERROR is where a completed-but-failed connect reports its verdict.
+	// Reading it also clears it, which is why this is a single shot.
+	CInt pending = 0;
+	net::os::Socklen_t optlen = CInt::size;
+	if (os::getsockopt(fd, os::SOL_SOCKET, os::SO_ERROR, &pending, &optlen) != 0)
+	{
+		return finish(&outcome, &started, PortState.ERROR, (int)libc::errno());
+	}
+	if (pending != 0)
+	{
+		return finish(&outcome, &started, classify_error((int)pending), (int)pending);
+	}
+
+	return finish(&outcome, &started, PortState.OPEN, 0);
+}
+
+<*
+ Human readable name for a state, used by the results table.
 *>
 fn String state_name(PortState state)
 {
@@ -53,16 +127,15 @@ fn String state_name(PortState state)
 }
 
 <*
- Is this errno one of the "the connect is still on its way" codes?
+ Did connect() fail because the attempt is still running, rather than
+ because it failed outright?
 
- A non-blocking connect returns immediately with one of these when the answer
- is not ready yet, which is the normal case for any host that is not on the
- local machine.
+ EWOULDBLOCK is the same value as EAGAIN on Linux and macOS, so the
+ comparison is written with `||` rather than a switch to avoid duplicate
+ switch cases.
 *>
 macro bool is_connect_in_flight(int err)
 {
-	// EWOULDBLOCK is the same value as EAGAIN on Linux and macOS, so the
-	// second test is redundant there but not on every platform.
 	return err == libc::Errno.EINPROGRESS
 		|| err == libc::Errno.EAGAIN
 		|| err == libc::Errno.EWOULDBLOCK
@@ -70,11 +143,7 @@ macro bool is_connect_in_flight(int err)
 }
 
 <*
- Turn a connect errno into a port state.
-
- The distinction that matters most is ECONNREFUSED, which is a definite answer
- from the host, versus a timeout or an unreachable network, which is silence
- and so usually means a firewall dropped the packet.
+ Map a failed connect onto a scan result.
 *>
 fn PortState classify_error(int err)
 {
@@ -92,85 +161,13 @@ fn PortState classify_error(int err)
 }
 
 <*
- Probe one port on one endpoint.
-
- @param ep : "the address to connect to; not modified"
- @param port : "the TCP port to try"
- @param timeout : "how long to wait for the connect to resolve"
- @return "the state, how long it took, and the errno behind it"
+ Stamp the elapsed time and the detail code onto an outcome and return it.
+ Written as a helper so every exit path above reports timing consistently.
 *>
-fn Outcome probe(target::Endpoint* ep, int port, Duration timeout)
-{
-	Outcome outcome = { .state = PortState.ERROR, .elapsed = time::DURATION_ZERO, .detail = 0 };
-	Clock clock = clock::now();
-
-	// A local copy of the template, so probes against the same endpoint
-	// cannot see each other's port.
-	char[target::SOCKADDR_MAX] addr = ep.addr;
-	target::set_port_raw(&addr, port);
-
-	net::NativeSocket fd = net::os::socket(ep.family, ep.socktype, ep.protocol);
-	if (fdINVALID == fd)
-	{
-		return finish(outcome, PortState.ERROR, clock, (int)libc::errno());
-	}
-	defer net::os::close(fd);
-
-	if (catch @err = net::os::set_non_blocking(fd, true))
-	{
-		return finish(outcome, PortState.ERROR, clock, (int)@err);
-	}
-
-	int err = 0;
-	if (catch connect_err = net::os::connect(fd, (void*)&addr, ep.addrlen))
-	{
-		err = (int)connect_err;
-		if (!is_connect_in_flight(err))
-		{
-			// A definite refusal, or a failure to even start.
-			return finish(outcome, classify_error(err), clock, err);
-		}
-	}
-
-	// Either connect returned EINPROGRESS or it succeeded immediately. Poll
-	// for writability to find out which; a socket that is already writable
-	// means the connect finished.
-	int? ready = net::poll_ms(&fd, 1, (int)timeout.to_ms());
-	if (!@ok(ready))
-	{
-		// poll() reporting an error is not the same as the port being
-		// closed, so keep whatever errno is pending.
-		return finish(outcome, PortState.ERROR, clock, (int)libc::errno());
-	}
-	if (ready!! == 0)
-	{
-		// Writable but not yet ready to report success, or simply too slow.
-		if (!pending_error_is_clear(fd)) return finish(outcome, PortState.FILTERED, clock, 0);
-	}
-
-	int? so_error = net::os::getsockopt_int(fd, net::os::SOL_SOCKET, net::os::SO_ERROR);
-	if (!@ok(so_error))
-	{
-		return finish(outcome, PortState.ERROR, clock, (int)libc::errno());
-	}
-	if (so_error!! != 0)
-	{
-		return finish(outcome, classify_error(so_error!!), clock, so_error!!);
-	}
-
-	return finish(outcome, PortState.OPEN, clock, 0);
-}
-
-<*
- Stamp the timing and detail onto an outcome and hand it back.
-
- Done in one place so every early return above records how long it took,
- rather than only the paths that fall through to the end.
-*>
-fn Outcome finish(Outcome outcome, PortState state, Clock clock, int detail)
+macro Outcome finish(Outcome* outcome, Clock* started, PortState state, int detail)
 {
 	outcome.state = state;
 	outcome.detail = detail;
-	outcome.elapsed = clock.to_now().to_duration();
-	return outcome;
+	outcome.elapsed = started.to_now().to_duration();
+	return *outcome;
 }
