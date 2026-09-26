@@ -34,7 +34,11 @@ jobs:
         run: c3c --version
 
       - name: Build
-        run: c3c build
+        run: c3c build 2>&1 | tee build.log
+
+      - name: Show the build log on failure
+        if: failure()
+        run: cat build.log
 
       - name: Test
         run: c3c test
