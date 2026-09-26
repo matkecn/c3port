@@ -23,7 +23,7 @@
 *>
 module c3port::ports;
 
-import std::io, c3port::services;
+import std::core::mem::alloc, std::io, c3port::services;
 
 const int PORT_MIN = 1;
 const int PORT_MAX = 65535;
@@ -53,3 +53,61 @@ struct PortSet
 }
 
 fn PortSet failed(ParseError error) => { .ports = {}, .error = error };
+
+<*
+ A growable usz array.
+
+ A hand rolled buffer rather than a List because the result has to be handed
+ back as a plain slice anyway. `push` refuses to grow past `limit`, which is
+ how the caller's port cap is enforced in exactly one place.
+*>
+struct PortBuf
+{
+	usz[] data;
+	sz len;
+	sz cap;
+	sz limit;
+	Allocator allocator;
+}
+
+fn PortBuf* PortBuf.init(PortBuf* self, Allocator allocator, sz limit)
+{
+	self.allocator = allocator;
+	self.limit = limit;
+	self.len = 0;
+	self.cap = limit < 64 ? limit : 64;
+	usz[]? data = allocator.alloc_array_try(usz, self.cap);
+	if (!@ok(data)) return null;
+	self.data = data!!;
+	return self;
+}
+
+fn void PortBuf.free(PortBuf* self)
+{
+	if (self.data) alloc::free(self.allocator, self.data);
+	self.data = {};
+	self.len = 0;
+	self.cap = 0;
+}
+
+<*
+ Append a value. Returns false when the limit is reached, without storing.
+*>
+fn bool PortBuf.push(PortBuf* self, usz value)
+{
+	if (self.len >= self.limit) return false;
+	if (self.len == self.cap && !grow(self)) return false;
+	self.data[self.len++] = value;
+	return true;
+}
+
+fn bool grow(PortBuf* self)
+{
+	sz cap = self.cap * 2;
+	if (cap > self.limit) cap = self.limit;
+	usz[]? resized = alloc::realloc_array_try(self.allocator, self.data, usz, cap);
+	if (!@ok(resized)) return false;
+	self.data = resized!!;
+	self.cap = cap;
+	return true;
+}
