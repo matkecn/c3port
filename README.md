@@ -159,8 +159,9 @@ that returns a `ParseError`. Add the cases to `ports::describe` at the same
 time; `test_describe_covers_every_error` fails if a new error goes undescribed.
 
 **Add a probe method.** UDP or ICMP would be a new state in `probe::PortState`
-plus a `probe::probe_*` function, then a `case` in `Report.wants` and in
-`scanner::count`. C3 will point at the switch that needs updating.
+plus a new `probe::probe_*` entry point alongside the existing `probe::probe`,
+then a `case` in `Report.wants` and in `scanner::count`. C3 will point at the
+switch that needs updating.
 
 **Add an output format.** `src/report.c3` only reads the `Report` struct, so a
 JSON or CSV writer is a new function there that needs nothing from the scanner.
