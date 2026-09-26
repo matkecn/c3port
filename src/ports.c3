@@ -144,3 +144,104 @@ fn bool push_unique(PortBuf* buf, SeenSet* seen, usz port)
 	seen.mark(port);
 	return buf.push(port);
 }
+
+<*
+ Convert a single port token to an int.
+
+ @param text : "the token, digits only"
+ @param out : "receives the port number on success"
+ @return "NONE on success, otherwise why the token was rejected"
+*>
+fn ParseError parse_port_number(String text, int* out)
+{
+	if (text.len == 0) return ParseError.INVALID;
+	foreach (char c : text)
+	{
+		// Digits only. This rejects a leading sign, so "-1" is reported as
+		// an invalid token rather than as a range start.
+		if (c < '0' || c > '9') return ParseError.INVALID;
+	}
+
+	int? value = text.to_int();
+	if (!@ok(value)) return ParseError.INVALID;
+	if (value!! < PORT_MIN || value!! > PORT_MAX) return ParseError.OUT_OF_RANGE;
+
+	*out = value!!;
+	return ParseError.NONE;
+}
+
+<*
+ Append every port in an inclusive range.
+*>
+fn ParseError add_range(PortBuf* buf, SeenSet* seen, int from, int to)
+{
+	for (int port = from; port <= to; port++)
+	{
+		if (!push_unique(buf, seen, (usz)port)) return ParseError.TOO_MANY;
+	}
+	return ParseError.NONE;
+}
+
+<*
+ Handle one comma-delimited element: either `port` or `from-to`.
+*>
+fn ParseError add_token(PortBuf* buf, SeenSet* seen, String token)
+{
+	sz? dash_at = token.index_of_char('-');
+
+	if (!@ok(dash_at))
+	{
+		int port = 0;
+		ParseError error = parse_port_number(token, &port);
+		if (error != ParseError.NONE) return error;
+		if (!push_unique(buf, seen, (usz)port)) return ParseError.TOO_MANY;
+		return ParseError.NONE;
+	}
+
+	sz split = dash_at!!;
+
+	// A leading '-' has nothing before it, so it can only be a typo.
+	if (split == 0) return ParseError.INVALID;
+
+	int from = 0;
+	ParseError error = parse_port_number(token[0..split - 1].trim(), &from);
+	if (error != ParseError.NONE) return error;
+
+	// An open ended "8000-" means "8000 up to the last port", which shows up
+	// here as an empty range after the dash. C3 range slices include both
+	// ends, so the text after the dash is [split + 1..len - 1].
+	String to_text = split + 1 <= token.len - 1
+		? token[split + 1..token.len - 1].trim()
+		: "";
+	int to = PORT_MAX;
+	if (to_text.len > 0)
+	{
+		error = parse_port_number(to_text, &to);
+		if (error != ParseError.NONE) return error;
+	}
+
+	if (from > to) return ParseError.INVALID;
+	return add_range(buf, seen, from, to);
+}
+
+<*
+ Handle a comma separated list of single ports and ranges.
+*>
+fn ParseError add_list(PortBuf* buf, SeenSet* seen, String spec)
+{
+	sz start = 0;
+	while (true)
+	{
+		sz comma = start;
+		while (comma < spec.len && spec[comma] != ',') comma++;
+
+		// C3 range slices include both ends, so a token that runs to the
+		// end of the spec ends at len - 1 rather than len.
+		sz last = comma > 0 ? comma - 1 : 0;
+		ParseError error = add_token(buf, seen, spec[start..last].trim());
+		if (error != ParseError.NONE) return error;
+
+		if (comma >= spec.len) return ParseError.NONE;
+		start = comma + 1;
+	}
+}
