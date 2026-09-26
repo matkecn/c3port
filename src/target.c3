@@ -261,9 +261,10 @@ fn void format_label(Endpoint* ep)
 		return;
 	}
 
-	// IPv6: 8 big endian 16 bit groups starting at byte 8.
+	// IPv6: 8 big endian 16 bit groups starting at byte 8. This needs an
+	// index loop; `foreach` over the array would bind each group's value.
 	usz[8] groups;
-	foreach (usz i : groups)
+	for (usz i = 0; i < 8; i++)
 	{
 		groups[i] = ((usz)octet(ep.addr[8 + i * 2]) << 8) | (usz)octet(ep.addr[9 + i * 2]);
 	}
