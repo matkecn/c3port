@@ -167,3 +167,138 @@ macro usz LabelWriter.finish(LabelWriter* self)
  platforms, so a plain cast would turn 200 into -56.
 *>
 macro usz octet(char byte) => (usz)(byte & 0xff);
+
+<*
+ Render 8 IPv6 groups in the canonical compressed form.
+
+ RFC 5952 asks for the longest run of two or more zero groups to collapse to
+ "::", and for hex digits with no leading zeros. Both matter here because the
+ common case, "::1", is exactly a run at the start.
+
+ @param w : "destination"
+ @param groups : "the 8 groups, already decoded from the sockaddr"
+*>
+fn void format_ipv6(LabelWriter* w, usz[] groups)
+{
+	// Find the longest run of zero groups. A single zero group is never
+	// compressed, per RFC 5952 4.2.2.
+	usz best_start = 0;
+	usz best_len = 0;
+	usz run_start = 0;
+	usz run_len = 0;
+	for (usz i = 0; i < 8; i++)
+	{
+		if (groups[i] == 0)
+		{
+			if (run_len == 0) run_start = i;
+			run_len++;
+			if (run_len > best_len)
+			{
+				best_start = run_start;
+				best_len = run_len;
+			}
+		}
+		else
+		{
+			run_len = 0;
+		}
+	}
+	if (best_len < 2)
+	{
+		best_start = 0;
+		best_len = 0;
+	}
+
+	// `need_sep` rather than "have I printed anything yet", because the "::"
+	// that stands in for a zero run already separates whatever follows it.
+	bool need_sep = false;
+	usz i = 0;
+	while (i < 8)
+	{
+		if (i == best_start)
+		{
+			w.put(':');
+			w.put(':');
+			need_sep = false;
+			i += best_len;
+			continue;
+		}
+		if (need_sep) w.put(':');
+		w.put_hex(groups[i]);
+		need_sep = true;
+		i++;
+	}
+}
+
+<*
+ Render the address bytes of the sockaddr into `ep.label`.
+
+ Written by hand rather than via `inet_ntop` so the module has no dependency
+ on a libc that may not exist. Only the shapes `getaddrinfo` can hand back for
+ AF_INET / AF_INET6 are handled.
+*>
+fn void format_label(Endpoint* ep)
+{
+	LabelWriter w;
+	w.buf = &ep.label;
+	w.pos = 0;
+
+	if (ep.family == os::AF_INET)
+	{
+		// IPv4 address lives at byte 4.
+		for (usz i = 0; i < 4; i++)
+		{
+			if (i > 0) w.put('.');
+			w.put_number(octet(ep.addr[4 + i]));
+		}
+		ep.label[w.finish()] = '\0';
+		return;
+	}
+
+	// IPv6: 8 big endian 16 bit groups starting at byte 8.
+	usz[8] groups;
+	foreach (usz i : groups)
+	{
+		groups[i] = ((usz)octet(ep.addr[8 + i * 2]) << 8) | (usz)octet(ep.addr[9 + i * 2]);
+	}
+
+	format_ipv6(&w, groups[..]);
+	ep.label[w.finish()] = '\0';
+}
+
+<*
+ Printable address of this endpoint, e.g. "127.0.0.1" or "::1".
+*>
+fn String Endpoint.address(Endpoint* self)
+{
+	usz len = 0;
+	while (len < self.label.len && self.label[len] != '\0') len++;
+	return (String)self.label[:len];
+}
+
+<*
+ Turn one node of the resolution chain into a probe ready endpoint.
+
+ @param ai : "a node from the chain returned by `net::addrinfo`"
+ @return "an endpoint whose `addr` has a zeroed port field"
+*>
+fn Endpoint make_endpoint(os::AddrInfo* ai)
+{
+	assert(ai.ai_addrlen > 0 && ai.ai_addrlen <= SOCKADDR_MAX,
+		"unexpected sockaddr length %d", ai.ai_addrlen);
+
+	Endpoint ep;
+	ep.family = ai.ai_family;
+	ep.socktype = ai.ai_socktype;
+	ep.protocol = ai.ai_protocol;
+	ep.addrlen = ai.ai_addrlen;
+
+	// Zero the whole buffer so the unused tail of `addr` is deterministic and
+	// so the port field starts out well defined.
+	ep.addr = {};
+	mem::copy(&ep.addr, (void*)ai.ai_addr, (usz)ai.ai_addrlen);
+	ep.set_port(0);
+
+	format_label(&ep);
+	return ep;
+}
