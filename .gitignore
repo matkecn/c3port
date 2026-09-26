@@ -1,0 +1,12 @@
+# Build output
+build/
+out/
+
+# Stray binaries from `c3c compile-run` and debug symbol bundles
+/c3port
+/c3port.dSYM/
+*.dSYM/
+
+# Editor and OS noise
+.DS_Store
+*.swp
