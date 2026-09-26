@@ -1,5 +1,5 @@
 <*
- c3port - a small TCP port scanner.
+ c3port - a small TCP connect port scanner.
 
  Entry point only: read options, parse the port spec, resolve the host, run
  the scan, print the results. Everything of substance lives in the sibling

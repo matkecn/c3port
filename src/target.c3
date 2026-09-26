@@ -29,6 +29,8 @@ const usz SOCKADDR_PORT_OFFSET = 2;
 const usz SOCKADDR_MAX = 128;
 const usz LABEL_MAX = 64;
 
+const char[16] HEX_DIGITS = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+
 <*
  One resolved address, pre-shaped so that probing many ports against it is
  just a two byte patch. Holds no heap memory.
@@ -81,6 +83,33 @@ fn void Resolution.close(&self)
 }
 
 <*
+ Turn one node of the resolution chain into a probe ready endpoint.
+
+ @param ai : "a node from the chain returned by `net::addrinfo`"
+ @return "an endpoint whose `addr` has a zeroed port field"
+*>
+fn Endpoint make_endpoint(os::AddrInfo* ai)
+{
+	assert(ai.ai_addrlen > 0 && ai.ai_addrlen <= SOCKADDR_MAX,
+		"unexpected sockaddr length %d", ai.ai_addrlen);
+
+	Endpoint ep;
+	ep.family = ai.ai_family;
+	ep.socktype = ai.ai_socktype;
+	ep.protocol = ai.ai_protocol;
+	ep.addrlen = ai.ai_addrlen;
+
+	// Zero the whole buffer so the unused tail of `addr` is deterministic and
+	// so the port field starts out well defined.
+	ep.addr = {};
+	mem::copy(&ep.addr, (void*)ai.ai_addr, (usz)ai.ai_addrlen);
+	ep.set_port(0);
+
+	format_label(&ep);
+	return ep;
+}
+
+<*
  Overwrite the port field of a raw sockaddr buffer.
 
  This is the single place that knows the port's byte layout, so the scanner
@@ -97,7 +126,52 @@ macro void set_port_raw(char[] addr, int port)
 *>
 macro void Endpoint.set_port(Endpoint* self, int port) => set_port_raw(&self.addr, port);
 
-const char[16] HEX_DIGITS = { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+<*
+ Printable address of this endpoint, e.g. "127.0.0.1" or "::1".
+*>
+fn String Endpoint.address(Endpoint* self)
+{
+	usz len = 0;
+	while (len < self.label.len && self.label[len] != '\0') len++;
+	return (String)self.label[:len];
+}
+
+<*
+ Render the address bytes of the sockaddr into `ep.label`.
+
+ Written by hand rather than via `inet_ntop` so the module has no dependency
+ on a libc that may not exist. Only the shapes `getaddrinfo` can hand back for
+ AF_INET / AF_INET6 are handled.
+*>
+fn void format_label(Endpoint* ep)
+{
+	LabelWriter w;
+	w.buf = &ep.label;
+	w.pos = 0;
+
+	if (ep.family == os::AF_INET)
+	{
+		// IPv4 address lives at byte 4.
+		for (usz i = 0; i < 4; i++)
+		{
+			if (i > 0) w.put('.');
+			w.put_number(octet(ep.addr[4 + i]));
+		}
+		ep.label[w.finish()] = '\0';
+		return;
+	}
+
+	// IPv6: 8 big endian 16 bit groups starting at byte 8. This needs an
+	// index loop; `foreach` over the array would bind each group's value.
+	usz[8] groups;
+	for (usz i = 0; i < 8; i++)
+	{
+		groups[i] = ((usz)octet(ep.addr[8 + i * 2]) << 8) | (usz)octet(ep.addr[9 + i * 2]);
+	}
+
+	format_ipv6(&w, groups[..]);
+	ep.label[w.finish()] = '\0';
+}
 
 <*
  A cursor over an endpoint's `label` buffer.
@@ -161,12 +235,6 @@ macro usz LabelWriter.finish(LabelWriter* self)
 {
 	return self.pos < self.buf.len - 1 ? self.pos : self.buf.len - 1;
 }
-
-<*
- Reinterpret a sockaddr byte as an unsigned value. `char` is signed on most
- platforms, so a plain cast would turn 200 into -56.
-*>
-macro usz octet(char byte) => (usz)(byte & 0xff);
 
 <*
  Render 8 IPv6 groups in the canonical compressed form.
@@ -237,75 +305,7 @@ fn void format_ipv6(LabelWriter* w, usz[] groups)
 }
 
 <*
- Render the address bytes of the sockaddr into `ep.label`.
-
- Written by hand rather than via `inet_ntop` so the module has no dependency
- on a libc that may not exist. Only the shapes `getaddrinfo` can hand back for
- AF_INET / AF_INET6 are handled.
+ Reinterpret a sockaddr byte as an unsigned value. `char` is signed on most
+ platforms, so a plain cast would turn 200 into -56.
 *>
-fn void format_label(Endpoint* ep)
-{
-	LabelWriter w;
-	w.buf = &ep.label;
-	w.pos = 0;
-
-	if (ep.family == os::AF_INET)
-	{
-		// IPv4 address lives at byte 4.
-		for (usz i = 0; i < 4; i++)
-		{
-			if (i > 0) w.put('.');
-			w.put_number(octet(ep.addr[4 + i]));
-		}
-		ep.label[w.finish()] = '\0';
-		return;
-	}
-
-	// IPv6: 8 big endian 16 bit groups starting at byte 8. This needs an
-	// index loop; `foreach` over the array would bind each group's value.
-	usz[8] groups;
-	for (usz i = 0; i < 8; i++)
-	{
-		groups[i] = ((usz)octet(ep.addr[8 + i * 2]) << 8) | (usz)octet(ep.addr[9 + i * 2]);
-	}
-
-	format_ipv6(&w, groups[..]);
-	ep.label[w.finish()] = '\0';
-}
-
-<*
- Printable address of this endpoint, e.g. "127.0.0.1" or "::1".
-*>
-fn String Endpoint.address(Endpoint* self)
-{
-	usz len = 0;
-	while (len < self.label.len && self.label[len] != '\0') len++;
-	return (String)self.label[:len];
-}
-
-<*
- Turn one node of the resolution chain into a probe ready endpoint.
-
- @param ai : "a node from the chain returned by `net::addrinfo`"
- @return "an endpoint whose `addr` has a zeroed port field"
-*>
-fn Endpoint make_endpoint(os::AddrInfo* ai)
-{
-	assert(ai.ai_addrlen > 0 && ai.ai_addrlen <= SOCKADDR_MAX,
-		"unexpected sockaddr length %d", ai.ai_addrlen);
-
-	Endpoint ep;
-	ep.family = ai.ai_family;
-	ep.socktype = ai.ai_socktype;
-	ep.protocol = ai.ai_protocol;
-	ep.addrlen = ai.ai_addrlen;
-
-	// Zero the whole buffer so the unused tail of `addr` is deterministic and
-	// so the port field starts out well defined.
-	ep.addr = {};
-	mem::copy(&ep.addr, (void*)ai.ai_addr, (usz)ai.ai_addrlen);
-	ep.set_port(0);
-
-	format_label(&ep);
-	return ep;
-}
+macro usz octet(char byte) => (usz)(byte & 0xff);

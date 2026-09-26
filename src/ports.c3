@@ -23,7 +23,7 @@
 *>
 module c3port::ports;
 
-import std::core::mem::alloc, std::io, c3port::services;
+import std::core::mem, std::core::mem::alloc, std::io, c3port::services;
 
 const int PORT_MIN = 1;
 const int PORT_MAX = 65535;
@@ -134,116 +134,92 @@ macro bool SeenSet.contains(SeenSet* self, usz bit)
 }
 
 <*
- Append a port unless it was already collected. Returns false when the cap
- is reached, so the caller can report TOO_MANY once.
-*>
-fn bool push_unique(PortBuf* buf, SeenSet* seen, usz port)
-{
-	if (port < (usz)PORT_MIN || port > (usz)PORT_MAX) return true;
-	if (seen.contains(port)) return true;
-	seen.mark(port);
-	return buf.push(port);
-}
+ Parse a port specification into a duplicate-free list.
 
-<*
- Convert a single port token to an int.
-
- @param text : "the token, digits only"
- @param out : "receives the port number on success"
- @return "NONE on success, otherwise why the token was rejected"
+ @param allocator : "owns the returned slice; release it with allocator.free"
+ @param spec : "the raw user string, for example 1-1024,8080 or top100"
+ @param max_ports : "upper bound on how many ports the spec may expand to"
+ @return "a PortSet; check `error` before using `ports`"
 *>
-fn ParseError parse_port_number(String text, int* out)
+fn PortSet parse(Allocator allocator, String spec, sz max_ports = PORT_SPACE)
 {
-	if (text.len == 0) return ParseError.INVALID;
-	foreach (char c : text)
+	String trimmed = spec.trim();
+	if (trimmed.len == 0) return failed(ParseError.EMPTY);
+	if (max_ports <= 0) return failed(ParseError.TOO_MANY);
+
+	PortBuf buf;
+	if (!buf.init(allocator, max_ports)) return failed(ParseError.NO_MEMORY);
+	defer buf.free();
+
+	SeenSet seen;
+
+	ParseError error;
+	if (trimmed == ALL_KEYWORD)
 	{
-		// Digits only. This rejects a leading sign, so "-1" is reported as
-		// an invalid token rather than as a range start.
-		if (c < '0' || c > '9') return ParseError.INVALID;
+		error = add_range(&buf, &seen, PORT_MIN, PORT_MAX);
 	}
-
-	int? value = text.to_int();
-	if (!@ok(value)) return ParseError.INVALID;
-	if (value!! < PORT_MIN || value!! > PORT_MAX) return ParseError.OUT_OF_RANGE;
-
-	*out = value!!;
-	return ParseError.NONE;
-}
-
-<*
- Append every port in an inclusive range.
-*>
-fn ParseError add_range(PortBuf* buf, SeenSet* seen, int from, int to)
-{
-	for (int port = from; port <= to; port++)
+	else if (trimmed.starts_with(TOP_KEYWORD))
 	{
-		if (!push_unique(buf, seen, (usz)port)) return ParseError.TOO_MANY;
-	}
-	return ParseError.NONE;
-}
-
-<*
- Handle one comma-delimited element: either `port` or `from-to`.
-*>
-fn ParseError add_token(PortBuf* buf, SeenSet* seen, String token)
-{
-	sz? dash_at = token.index_of_char('-');
-
-	if (!@ok(dash_at))
-	{
-		int port = 0;
-		ParseError error = parse_port_number(token, &port);
-		if (error != ParseError.NONE) return error;
-		if (!push_unique(buf, seen, (usz)port)) return ParseError.TOO_MANY;
-		return ParseError.NONE;
-	}
-
-	sz split = dash_at!!;
-
-	// A leading '-' has nothing before it, so it can only be a typo.
-	if (split == 0) return ParseError.INVALID;
-
-	int from = 0;
-	ParseError error = parse_port_number(token[0..split - 1].trim(), &from);
-	if (error != ParseError.NONE) return error;
-
-	// An open ended "8000-" means "8000 up to the last port", which shows up
-	// here as an empty range after the dash. C3 range slices include both
-	// ends, so the text after the dash is [split + 1..len - 1].
-	String to_text = split + 1 <= token.len - 1
-		? token[split + 1..token.len - 1].trim()
+	// C3 range slices include both ends, so the text after "top" is
+	// [3..len - 1] and the bare "top" keyword has nothing after it at all.
+	String suffix = trimmed.len > TOP_KEYWORD.len
+		? trimmed[TOP_KEYWORD.len..trimmed.len - 1]
 		: "";
-	int to = PORT_MAX;
-	if (to_text.len > 0)
+		error = add_top(&buf, suffix);
+	}
+	else
 	{
-		error = parse_port_number(to_text, &to);
-		if (error != ParseError.NONE) return error;
+		error = add_list(&buf, &seen, trimmed);
 	}
 
-	if (from > to) return ParseError.INVALID;
-	return add_range(buf, seen, from, to);
+	if (error != ParseError.NONE) return failed(error);
+
+	// Hand back an exactly sized copy, so the caller is not tied to our
+	// over-allocated capacity and `buf.free` leaves nothing behind.
+	usz[]? exact = alloc::alloc_array_try(allocator, usz, buf.len);
+	if (!@ok(exact)) return failed(ParseError.NO_MEMORY);
+	exact!![..] = buf.data[:buf.len];
+	return { .ports = exact!!, .error = ParseError.NONE };
 }
 
 <*
- Handle a comma separated list of single ports and ranges.
+ A short, user-facing explanation of a parse failure.
 *>
-fn ParseError add_list(PortBuf* buf, SeenSet* seen, String spec)
+fn String describe(ParseError error)
 {
-	sz start = 0;
-	while (true)
+	switch (error)
 	{
-		sz comma = start;
-		while (comma < spec.len && spec[comma] != ',') comma++;
-
-		// C3 range slices include both ends, so a token that runs to the
-		// end of the spec ends at len - 1 rather than len.
-		sz last = comma > 0 ? comma - 1 : 0;
-		ParseError error = add_token(buf, seen, spec[start..last].trim());
-		if (error != ParseError.NONE) return error;
-
-		if (comma >= spec.len) return ParseError.NONE;
-		start = comma + 1;
+		case ParseError.NONE: return "no error";
+		case ParseError.EMPTY: return "the port list is empty";
+		case ParseError.INVALID: return "expected something like 22, 1-1024, 80,443 or top100";
+		case ParseError.OUT_OF_RANGE: return "port numbers must be between 1 and 65535";
+		case ParseError.TOO_MANY: return "that expands to more ports than allowed";
+		case ParseError.NO_MEMORY: return "out of memory while building the port list";
 	}
+}
+
+<*
+ Handle the `top`, `top100`, `top1000` forms. `suffix` is whatever followed
+ the "top" keyword and may be empty.
+*>
+fn ParseError add_top(PortBuf* buf, String suffix)
+{
+	sz count = (sz)services::DEFAULT_TOP_COUNT;
+	if (suffix.len > 0)
+	{
+		ParseError error = parse_count(suffix, &count);
+		if (error != ParseError.NONE) return error;
+	}
+
+	// Asking for more ports than are known is not an error; it just means
+	// "scan everything in the table".
+	if (count > (sz)services::KNOWN.len) count = (sz)services::KNOWN.len;
+
+	for (sz i = 0; i < count; i++)
+	{
+		if (!buf.push((usz)services::KNOWN[i].port)) return ParseError.TOO_MANY;
+	}
+	return ParseError.NONE;
 }
 
 <*
@@ -289,90 +265,114 @@ fn ParseError parse_count(String text, sz* out)
 }
 
 <*
- Handle the `top`, `top100`, `top1000` forms. `suffix` is whatever followed
- the "top" keyword and may be empty.
+ Handle a comma separated list of single ports and ranges.
 *>
-fn ParseError add_top(PortBuf* buf, String suffix)
+fn ParseError add_list(PortBuf* buf, SeenSet* seen, String spec)
 {
-	sz count = (sz)services::DEFAULT_TOP_COUNT;
-	if (suffix.len > 0)
+	sz start = 0;
+	while (true)
 	{
-		ParseError error = parse_count(suffix, &count);
+		sz comma = start;
+		while (comma < spec.len && spec[comma] != ',') comma++;
+
+		// C3 range slices include both ends, so a token that runs to the
+		// end of the spec ends at len - 1 rather than len.
+		sz last = comma > 0 ? comma - 1 : 0;
+		ParseError error = add_token(buf, seen, spec[start..last].trim());
+		if (error != ParseError.NONE) return error;
+
+		if (comma >= spec.len) return ParseError.NONE;
+		start = comma + 1;
+	}
+}
+
+<*
+ Handle one comma-delimited element: either `port` or `from-to`.
+*>
+fn ParseError add_token(PortBuf* buf, SeenSet* seen, String token)
+{
+	sz? dash_at = token.index_of_char('-');
+
+	if (!@ok(dash_at))
+	{
+		int port = 0;
+		ParseError error = parse_port_number(token, &port);
+		if (error != ParseError.NONE) return error;
+		if (!push_unique(buf, seen, (usz)port)) return ParseError.TOO_MANY;
+		return ParseError.NONE;
+	}
+
+	sz split = dash_at!!;
+
+	// A leading '-' has nothing before it, so it can only be a typo.
+	if (split == 0) return ParseError.INVALID;
+
+	int from = 0;
+	ParseError error = parse_port_number(token[0..split - 1].trim(), &from);
+	if (error != ParseError.NONE) return error;
+
+	// An open ended "8000-" means "8000 up to the last port", which shows up
+	// here as an empty range after the dash. C3 range slices include both
+	// ends, so the text after the dash is [split + 1..len - 1].
+	String to_text = split + 1 <= token.len - 1
+		? token[split + 1..token.len - 1].trim()
+		: "";
+	int to = PORT_MAX;
+	if (to_text.len > 0)
+	{
+		error = parse_port_number(to_text, &to);
 		if (error != ParseError.NONE) return error;
 	}
 
-	// Asking for more ports than are known is not an error; it just means
-	// "scan everything in the table".
-	if (count > (sz)services::KNOWN.len) count = (sz)services::KNOWN.len;
+	if (from > to) return ParseError.INVALID;
+	return add_range(buf, seen, from, to);
+}
 
-	for (sz i = 0; i < count; i++)
+<*
+ Append every port in an inclusive range.
+*>
+fn ParseError add_range(PortBuf* buf, SeenSet* seen, int from, int to)
+{
+	for (int port = from; port <= to; port++)
 	{
-		if (!buf.push((usz)services::KNOWN[i].port)) return ParseError.TOO_MANY;
+		if (!push_unique(buf, seen, (usz)port)) return ParseError.TOO_MANY;
 	}
 	return ParseError.NONE;
 }
 
 <*
- Parse a port specification into a duplicate-free list.
+ Convert a single port token to an int.
 
- @param allocator : "owns the returned slice; release it with allocator.free"
- @param spec : "the raw user string, for example 1-1024,8080 or top100"
- @param max_ports : "upper bound on how many ports the spec may expand to"
- @return "a PortSet; check `error` before using `ports`"
+ @param text : "the token, digits only"
+ @param out : "receives the port number on success"
+ @return "NONE on success, otherwise why the token was rejected"
 *>
-fn PortSet parse(Allocator allocator, String spec, sz max_ports = PORT_SPACE)
+fn ParseError parse_port_number(String text, int* out)
 {
-	String trimmed = spec.trim();
-	if (trimmed.len == 0) return failed(ParseError.EMPTY);
-	if (max_ports <= 0) return failed(ParseError.TOO_MANY);
-
-	PortBuf buf;
-	if (!buf.init(allocator, max_ports)) return failed(ParseError.NO_MEMORY);
-	defer buf.free();
-
-	SeenSet seen;
-
-	ParseError error;
-	if (trimmed == ALL_KEYWORD)
+	if (text.len == 0) return ParseError.INVALID;
+	foreach (char c : text)
 	{
-		error = add_range(&buf, &seen, PORT_MIN, PORT_MAX);
-	}
-	else if (trimmed.starts_with(TOP_KEYWORD))
-	{
-		// C3 range slices include both ends, so the text after "top" is
-		// [3..len - 1] and the bare "top" keyword has nothing after it at all.
-		String suffix = trimmed.len > TOP_KEYWORD.len
-			? trimmed[TOP_KEYWORD.len..trimmed.len - 1]
-			: "";
-		error = add_top(&buf, suffix);
-	}
-	else
-	{
-		error = add_list(&buf, &seen, trimmed);
+		// Digits only. This rejects a leading sign, so "-1" is reported as
+		// an invalid token rather than as a range start.
+		if (c < '0' || c > '9') return ParseError.INVALID;
 	}
 
-	if (error != ParseError.NONE) return failed(error);
+	int? value = text.to_int();
+	if (!@ok(value)) return ParseError.INVALID;
+	if (value!! < PORT_MIN || value!! > PORT_MAX) return ParseError.OUT_OF_RANGE;
 
-	// Hand back an exactly sized copy, so the caller is not tied to our
-	// over-allocated capacity and `buf.free` leaves nothing behind.
-	usz[]? exact = alloc::alloc_array_try(allocator, usz, buf.len);
-	if (!@ok(exact)) return failed(ParseError.NO_MEMORY);
-	exact!![..] = buf.data[:buf.len];
-	return { .ports = exact!!, .error = ParseError.NONE };
+	*out = value!!;
+	return ParseError.NONE;
 }
 
 <*
- A short, user-facing explanation of a parse failure.
+ Append a port unless it was already collected. Returns false when the cap
+ is reached, so the caller can report TOO_MANY once.
 *>
-fn String describe(ParseError error)
+fn bool push_unique(PortBuf* buf, SeenSet* seen, usz port)
 {
-	switch (error)
-	{
-		case ParseError.NONE: return "no error";
-		case ParseError.EMPTY: return "the port list is empty";
-		case ParseError.INVALID: return "expected something like 22, 1-1024, 80,443 or top100";
-		case ParseError.OUT_OF_RANGE: return "port numbers must be between 1 and 65535";
-		case ParseError.TOO_MANY: return "that expands to more ports than allowed";
-		case ParseError.NO_MEMORY: return "out of memory while building the port list";
-	}
+	if (port < (usz)PORT_MIN || port > (usz)PORT_MAX) return true;
+	if (seen.contains(port)) return true;
+	seen.mark(port);
+	return buf.push(port);
 }
