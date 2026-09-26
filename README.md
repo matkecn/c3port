@@ -172,5 +172,4 @@ require changes to any other file.
 
 ## Legal
 
-No licence has been chosen yet, so `LICENSE` is empty and the repository is
-currently unlicensed. Add one before relying on this for anything.
+MIT, see [LICENSE](LICENSE).
