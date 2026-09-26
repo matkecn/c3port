@@ -113,3 +113,95 @@ fn Outcome parse(String[] args, Options* options)
 
 	return Outcome.SCAN;
 }
+
+<*
+ Handle one switch.
+
+ @param arg : "the argument as typed, for example -p or --ports=22"
+ @param index : "cursor into args; advanced past a value if one was consumed"
+ @return "SCAN to keep parsing, or EXIT / ERROR"
+*>
+fn Outcome parse_switch(String arg, String[] args, usz* index, Options* options)
+{
+	String inline_value;
+
+	// --long=value form.
+	//
+	// C3 range slices include both ends, so the pieces either side of the
+	// '=' are [0..equals - 1] and [equals + 1..len - 1]. The second one is
+	// empty when the user wrote a bare "--ports=", which the value readers
+	// below treat as "no inline value" and fall back to the next argument.
+	if (arg.contains_char('=') && arg.starts_with("--"))
+	{
+		sz equals = arg.index_of_char('=')!!;
+		inline_value = equals + 1 <= arg.len - 1 ? arg[equals + 1..arg.len - 1] : "";
+		arg = equals > 0 ? arg[0..equals - 1] : "";
+	}
+
+	if (arg == "-h" || arg == "--help")
+	{
+		print_usage();
+		return Outcome.EXIT;
+	}
+	if (arg == "--version")
+	{
+		(void)io::printfn("%s %s", PROGRAM, VERSION);
+		return Outcome.EXIT;
+	}
+	if (arg == "-4")
+	{
+		options.ip_version = IpVersion.V4;
+		return Outcome.SCAN;
+	}
+	if (arg == "-6")
+	{
+		options.ip_version = IpVersion.V6;
+		return Outcome.SCAN;
+	}
+	if (arg == "-a" || arg == "--all-states")
+	{
+		options.show_all = true;
+		options.show_closed = true;
+		options.show_filtered = true;
+		return Outcome.SCAN;
+	}
+	if (arg == "-c" || arg == "--closed")
+	{
+		options.show_closed = true;
+		return Outcome.SCAN;
+	}
+	if (arg == "-f" || arg == "--filtered")
+	{
+		options.show_filtered = true;
+		return Outcome.SCAN;
+	}
+	if (arg == "-v" || arg == "--verbose")
+	{
+		options.verbose = true;
+		return Outcome.SCAN;
+	}
+	if (arg == "-p" || arg == "--ports")
+	{
+		String value = take_value(inline_value, args, index, arg);
+		if (value.len == 0) return Outcome.ERROR;
+		options.port_spec = value;
+		return Outcome.SCAN;
+	}
+	if (arg == "-t" || arg == "--timeout")
+	{
+		String value = take_value(inline_value, args, index, arg);
+		if (value.len == 0) return Outcome.ERROR;
+		int? ms = value.to_int();
+		if (!@ok(ms) || ms!! <= 0)
+		{
+			(void)io::eprintfn("%s: --timeout expects a positive number of milliseconds, got '%s'", PROGRAM, value);
+			return Outcome.ERROR;
+		}
+		options.timeout = millis(ms!!);
+		return Outcome.SCAN;
+	}
+
+	(void)io::eprintfn("%s: unknown option '%s'", PROGRAM, arg);
+	(void)io::eprintfn("Try '%s --help' for more information.", PROGRAM);
+	return Outcome.ERROR;
+}
