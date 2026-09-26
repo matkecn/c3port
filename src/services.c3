@@ -138,3 +138,31 @@ const Service[] KNOWN =
  Number of ports scanned when `-p` is not given.
 *>
 const usz DEFAULT_TOP_COUNT = 100;
+
+<*
+ Look up a service name for a port.
+
+ @param port : "the TCP port number"
+ @return "the service name, or null if the port is not in the table"
+*>
+fn String? name_of(int port)
+{
+	usz low = 0;
+	usz high = KNOWN.len;
+	while (low < high)
+	{
+		usz mid = low + (high - low) / 2;
+		int candidate = KNOWN[mid].port;
+		if (candidate == port) return KNOWN[mid].name;
+		if (candidate < port)
+		{
+			low = mid + 1;
+		}
+		else
+		{
+			high = mid;
+		}
+	}
+	String? missing;
+	return missing;
+}
